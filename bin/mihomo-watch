@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+set -u
+
+INTERVAL_DEFAULT=2
+API_DEFAULT="http://127.0.0.1:9090"
+NODE_SELECTOR='🚀 节点选择'
+NODE_FALLBACK='—'
+
+parse_interval() {
+  local raw=${1-}
+  [[ $raw =~ ^[0-9]{1,6}$ ]] || return 1
+  (( 10#$raw >= 1 && 10#$raw <= 86400 )) || return 1
+  printf '%s' "$((10#$raw))"
+}
+
+interval=$INTERVAL_DEFAULT
+while (( $# > 0 )); do
+  case $1 in
+    --interval)
+      if (( $# >= 2 )); then
+        if value=$(parse_interval "$2"); then
+          interval=$value
+        else
+          interval=$INTERVAL_DEFAULT
+        fi
+        shift 2
+      else
+        interval=$INTERVAL_DEFAULT
+        shift
+      fi
+      ;;
+    --interval=*)
+      if value=$(parse_interval "${1#*=}"); then
+        interval=$value
+      else
+        interval=$INTERVAL_DEFAULT
+      fi
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+api=${MIHOMO_API:-$API_DEFAULT}
+auth=()
+if [[ -n ${MIHOMO_SECRET:-} ]]; then
+  auth=(-H "Authorization: Bearer ${MIHOMO_SECRET}")
+fi
+
+api_get() {
+  local path=$1
+  if (( ${#auth[@]} )); then
+    curl -s -m 2 --noproxy '*' "${auth[@]}" "${api%/}${path}"
+  else
+    curl -s -m 2 --noproxy '*' "${api%/}${path}"
+  fi
+}
+
+emit_error() {
+  jq -cn --arg error "$1" '{ok:false,error:$error}' 2>/dev/null \
+    || printf '{"ok":false,"error":"watch encode failed"}\n'
+}
+
+prev_up_total=
+prev_down_total=
+prev_ns=
+sample_no=0
+node=$NODE_FALLBACK
+
+while :; do
+  sample_no=$((sample_no + 1))
+  now_ns=$(date +%s%N)
+
+  if (( sample_no == 1 || (sample_no - 1) % 15 == 0 )); then
+    node=$NODE_FALLBACK
+    if proxies=$(api_get /proxies) && [[ -n $proxies ]]; then
+      refreshed=$(printf '%s' "$proxies" | jq -r --arg name "$NODE_SELECTOR" '
+        if (type == "object")
+           and (.proxies | type == "object")
+           and (.proxies[$name] | type == "object")
+           and (.proxies[$name].type == "Selector")
+           and (.proxies[$name].now | type == "string")
+        then .proxies[$name].now
+        else empty end' 2>/dev/null)
+      if [[ -n $refreshed ]]; then
+        node=$refreshed
+      fi
+    fi
+  fi
+
+  body=$(api_get /connections)
+  rc=$?
+  if (( rc != 0 )); then
+    emit_error "connections request failed (curl $rc)"
+    sleep "$interval"
+    continue
+  fi
+  if [[ -z $body ]]; then
+    emit_error "connections response empty"
+    sleep "$interval"
+    continue
+  fi
+
+  sample=$(printf '%s' "$body" | jq -r '
+    if (type == "object")
+       and (.uploadTotal | type == "number")
+       and (.downloadTotal | type == "number")
+       and (.connections | type == "array")
+    then [(.uploadTotal | floor), (.downloadTotal | floor), (.connections | length)] | @tsv
+    else empty end' 2>/dev/null)
+  if [[ -z $sample ]]; then
+    emit_error "connections response missing or invalid fields"
+    sleep "$interval"
+    continue
+  fi
+  IFS=$'\t' read -r up_total down_total conns <<<"$sample"
+  if [[ ! $up_total =~ ^[0-9]+$ || ! $down_total =~ ^[0-9]+$ || ! $conns =~ ^[0-9]+$ ]]; then
+    emit_error "connections response invalid numeric fields"
+    sleep "$interval"
+    continue
+  fi
+
+  configs=$(api_get /configs)
+  rc=$?
+  if (( rc != 0 )); then
+    emit_error "configs request failed (curl $rc)"
+    sleep "$interval"
+    continue
+  fi
+  if [[ -z $configs ]]; then
+    emit_error "configs response empty"
+    sleep "$interval"
+    continue
+  fi
+  mode=$(printf '%s' "$configs" | jq -r '
+    if (type == "object") and (.mode | type == "string") and ((.mode | length) > 0)
+    then .mode
+    else empty end' 2>/dev/null)
+  if [[ -z $mode ]]; then
+    emit_error "configs response missing or invalid mode"
+    sleep "$interval"
+    continue
+  fi
+
+  if [[ -z $prev_ns ]]; then
+    up=0
+    down=0
+  else
+    du=$((up_total - prev_up_total))
+    dd=$((down_total - prev_down_total))
+    (( du < 0 )) && du=0
+    (( dd < 0 )) && dd=0
+    if (( now_ns > prev_ns )); then
+      rates=$(awk -v du="$du" -v dd="$dd" -v ns="$((now_ns - prev_ns))" 'BEGIN {
+        seconds = ns / 1000000000
+        if (seconds <= 0) { print "0 0"; exit }
+        printf "%.0f %.0f\n", du / seconds, dd / seconds
+      }')
+      up=${rates%% *}
+      down=${rates#* }
+    else
+      up=0
+      down=0
+    fi
+    if [[ ! $up =~ ^-?[0-9]+$ || ! $down =~ ^-?[0-9]+$ ]]; then
+      up=0
+      down=0
+    fi
+  fi
+
+  ts=$(date +%s)
+  if ! line=$(jq -cn \
+    --arg mode "$mode" \
+    --arg node "$node" \
+    --argjson up "$up" \
+    --argjson down "$down" \
+    --argjson upTotal "$up_total" \
+    --argjson downTotal "$down_total" \
+    --argjson conns "$conns" \
+    --argjson ts "$ts" \
+    '{ok:true,mode:$mode,node:$node,up:$up,down:$down,upTotal:$upTotal,downTotal:$downTotal,conns:$conns,ts:$ts}'); then
+    emit_error "sample encode failed"
+  else
+    printf '%s\n' "$line"
+  fi
+
+  prev_up_total=$up_total
+  prev_down_total=$down_total
+  prev_ns=$now_ns
+  sleep "$interval"
+done

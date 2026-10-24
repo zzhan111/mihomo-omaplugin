@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.zzhan111.mihomo",
+  "name": "Mihomo",
+  "version": "0.1.0",
+  "author": "zzhan111",
+  "license": "MIT",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Mihomo",
+    "description": "Mihomo 模式、节点、速率与累计流量，点击查看明细。",
+    "category": "Network",
+    "aliases": [
+      "mihomo",
+      "clash",
+      "proxy"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

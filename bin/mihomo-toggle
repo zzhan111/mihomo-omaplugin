@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -u
+
+API_DEFAULT="http://127.0.0.1:9090"
+GROUP='🚀 节点选择'
+GLOBAL_GROUP='GLOBAL'
+NODE_A='Enet-FB'
+NODE_B='hy2-154'
+
+api=${MIHOMO_API:-$API_DEFAULT}
+auth=()
+if [[ -n ${MIHOMO_SECRET:-} ]]; then
+  auth=(-H "Authorization: Bearer ${MIHOMO_SECRET}")
+fi
+
+api_get() {
+  curl -s -m 3 --noproxy '*' "${auth[@]+"${auth[@]}"}" "${api%/}$1"
+}
+
+api_put() {
+  local path=$1 body=$2
+  curl -s -m 3 --noproxy '*' -o /dev/null -w '%{http_code}' \
+    -X PUT "${auth[@]+"${auth[@]}"}" \
+    -H 'Content-Type: application/json' \
+    -d "$body" \
+    "${api%/}$path"
+}
+
+api_patch() {
+  local path=$1 body=$2
+  curl -s -m 3 --noproxy '*' -o /dev/null -w '%{http_code}' \
+    -X PATCH "${auth[@]+"${auth[@]}"}" \
+    -H 'Content-Type: application/json' \
+    -d "$body" \
+    "${api%/}$path"
+}
+
+urlencode() {
+  jq -rn --arg s "$1" '$s|@uri'
+}
+
+fail() {
+  jq -cn --arg error "$1" '{ok:false,error:$error}'
+  exit 1
+}
+
+cmd=${1:-}
+case $cmd in
+  node)
+    configs=$(api_get /configs) || fail "configs request failed"
+    mode=$(printf '%s' "$configs" | jq -r 'if (.mode | type == "string") then .mode else empty end')
+    [[ -n $mode ]] || fail "current mode unavailable"
+    case $mode in
+      rule) group=$GROUP ;;
+      global) group=$GLOBAL_GROUP ;;
+      direct) fail "direct 模式不支持切换节点" ;;
+      *) fail "unsupported mode: $mode" ;;
+    esac
+
+    proxies=$(api_get /proxies) || fail "proxies request failed"
+    current=$(printf '%s' "$proxies" | jq -r --arg g "$group" '
+      if (.proxies | type == "object")
+         and (.proxies[$g] | type == "object")
+         and (.proxies[$g].type == "Selector")
+         and (.proxies[$g].now | type == "string")
+      then .proxies[$g].now
+      else empty end')
+    [[ -n $current ]] || fail "节点组不可用：${group}"
+    if [[ $current == "$NODE_B" ]]; then
+      target=$NODE_A
+    else
+      target=$NODE_B
+    fi
+    code=$(api_put "/proxies/$(urlencode "$group")" "$(jq -cn --arg name "$target" '{name:$name}')")
+    rc=$?
+    (( rc == 0 )) || fail "node switch request failed (curl $rc)"
+    [[ $code == 204 || $code == 200 ]] || fail "node switch failed (http $code)"
+    jq -cn --arg group "$group" --arg from "$current" --arg to "$target" \
+      '{ok:true,action:"node",group:$group,from:$from,to:$to}'
+    ;;
+  mode)
+    configs=$(api_get /configs) || fail "configs request failed"
+    current=$(printf '%s' "$configs" | jq -r 'if (.mode | type == "string") then .mode else empty end')
+    [[ -n $current ]] || fail "current mode unavailable"
+    if [[ $current == global ]]; then
+      target=rule
+    else
+      target=global
+    fi
+    code=$(api_patch /configs "$(jq -cn --arg mode "$target" '{mode:$mode}')")
+    rc=$?
+    (( rc == 0 )) || fail "mode switch request failed (curl $rc)"
+    [[ $code == 204 || $code == 200 ]] || fail "mode switch failed (http $code)"
+    jq -cn --arg from "$current" --arg to "$target" '{ok:true,action:"mode",from:$from,to:$to}'
+    ;;
+  *)
+    fail "usage: mihomo-toggle node|mode"
+    ;;
+esac

@@ -66,29 +66,9 @@ emit_error() {
 prev_up_total=
 prev_down_total=
 prev_ns=
-sample_no=0
-node=$NODE_FALLBACK
 
 while :; do
-  sample_no=$((sample_no + 1))
   now_ns=$(date +%s%N)
-
-  if (( sample_no == 1 || (sample_no - 1) % 15 == 0 )); then
-    node=$NODE_FALLBACK
-    if proxies=$(api_get /proxies) && [[ -n $proxies ]]; then
-      refreshed=$(printf '%s' "$proxies" | jq -r --arg name "$NODE_SELECTOR" '
-        if (type == "object")
-           and (.proxies | type == "object")
-           and (.proxies[$name] | type == "object")
-           and (.proxies[$name].type == "Selector")
-           and (.proxies[$name].now | type == "string")
-        then .proxies[$name].now
-        else empty end' 2>/dev/null)
-      if [[ -n $refreshed ]]; then
-        node=$refreshed
-      fi
-    fi
-  fi
 
   body=$(api_get /connections)
   rc=$?
@@ -142,6 +122,30 @@ while :; do
     emit_error "configs response missing or invalid mode"
     sleep "$interval"
     continue
+  fi
+
+  node=$NODE_FALLBACK
+  if [[ $mode == direct ]]; then
+    node=DIRECT
+  else
+    if [[ $mode == global ]]; then
+      node_group=GLOBAL
+    else
+      node_group=$NODE_SELECTOR
+    fi
+    if proxies=$(api_get /proxies) && [[ -n $proxies ]]; then
+      refreshed=$(printf '%s' "$proxies" | jq -r --arg name "$node_group" '
+        if (type == "object")
+           and (.proxies | type == "object")
+           and (.proxies[$name] | type == "object")
+           and (.proxies[$name].type == "Selector")
+           and (.proxies[$name].now | type == "string")
+        then .proxies[$name].now
+        else empty end' 2>/dev/null)
+      if [[ -n $refreshed ]]; then
+        node=$refreshed
+      fi
+    fi
   fi
 
   if [[ -z $prev_ns ]]; then

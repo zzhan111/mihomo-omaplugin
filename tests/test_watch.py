@@ -12,13 +12,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 PHASES = [
-    ("rule", "Enet-FB", "Enet-FB"),
-    ("rule", "hy2-154", "Enet-FB"),
-    ("global", "hy2-154", "DIRECT"),
-    ("global", "Enet-FB", "hy2-154"),
-    ("direct", "hy2-154", "Enet-FB"),
+    ("rule", "Node A", "Node A"),
+    ("rule", "Node B", "Node A"),
+    ("global", "Node B", "DIRECT"),
+    ("global", "Node A", "Node B"),
+    ("direct", "Node B", "Node A"),
 ]
-EXPECTED_NODES = ["Enet-FB", "hy2-154", "DIRECT", "hy2-154", "DIRECT"]
+EXPECTED_NODES = ["Node A", "Node B", "DIRECT", "Node B", "DIRECT"]
 REQUIRED_KEYS = {
     "ok",
     "mode",
@@ -70,7 +70,7 @@ class Handler(BaseHTTPRequestHandler):
             _, rocket, global_node = state.current()
             payload = {
                 "proxies": {
-                    "\U0001f680 \u8282\u70b9\u9009\u62e9": {
+                    "Proxy Group": {
                         "type": "Selector",
                         "now": rocket,
                     },
@@ -126,6 +126,7 @@ def main():
 
     env = os.environ.copy()
     env["MIHOMO_API"] = "http://127.0.0.1:%d" % server.server_port
+    env["MIHOMO_GROUP"] = "Proxy Group"
     env.pop("MIHOMO_SECRET", None)
     watcher = Path(__file__).resolve().parent.parent / "bin" / "mihomo-watch"
     proc = subprocess.Popen(

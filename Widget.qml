@@ -170,10 +170,14 @@ Panel {
   readonly property string sampleMode: sample && sample.mode !== undefined && sample.mode !== null ? String(sample.mode) : ""
   readonly property string sampleNode: sample ? field(sample.node) : "—"
   readonly property bool directMode: sampleMode === "direct"
-  readonly property string nodeTarget: sampleNode === "hy2-154" ? "Enet-FB" : "hy2-154"
+  readonly property string nodeA: Quickshell.env("MIHOMO_NODE_A") || ""
+  readonly property string nodeB: Quickshell.env("MIHOMO_NODE_B") || ""
+  readonly property string ruleGroup: Quickshell.env("MIHOMO_GROUP") || ""
+  readonly property bool nodeConfigured: nodeA !== "" && nodeB !== "" && (sampleMode !== "rule" || ruleGroup !== "")
+  readonly property string nodeTarget: sampleNode === nodeB ? nodeA : nodeB
   readonly property string modeTarget: sampleMode === "global" ? "rule" : "global"
   readonly property bool actionsReady: status === "live" && !toggleBusy
-  readonly property bool nodeActionEnabled: actionsReady && !directMode
+  readonly property bool nodeActionEnabled: actionsReady && !directMode && nodeConfigured
   readonly property bool modeActionEnabled: actionsReady
   onNodeActionEnabledChanged: if (!nodeActionEnabled && root.opened) keyCatcher.forceActiveFocus()
   onModeActionEnabledChanged: if (!modeActionEnabled && root.opened) keyCatcher.forceActiveFocus()
@@ -183,6 +187,7 @@ Panel {
     if (!sample) return "节点：等待状态"
     if (status === "offline") return "节点：状态离线"
     if (directMode) return "节点：direct 模式不可切换"
+    if (!nodeConfigured) return "节点：请配置切换选项"
     return "节点：当前 " + sampleNode + " → " + nodeTarget
   }
 
@@ -477,7 +482,7 @@ Panel {
           visible: root.sample !== null && root.sample.mode === "rule"
           width: parent.width
           textFormat: Text.PlainText
-          text: "rule 模式的节点取默认组「🚀 节点选择」，其他规则可能走别的组。"
+          text: "rule 模式显示配置组的当前节点，其他规则可能走别的组。"
           color: root.dim
           wrapMode: Text.Wrap
           font.family: root.fontFamily

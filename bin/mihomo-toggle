@@ -2,10 +2,10 @@
 set -u
 
 API_DEFAULT="http://127.0.0.1:9090"
-GROUP='🚀 节点选择'
+GROUP=${MIHOMO_GROUP:-}
 GLOBAL_GROUP='GLOBAL'
-NODE_A='Enet-FB'
-NODE_B='hy2-154'
+NODE_A=${MIHOMO_NODE_A:-}
+NODE_B=${MIHOMO_NODE_B:-}
 
 api=${MIHOMO_API:-$API_DEFAULT}
 auth=()
@@ -47,11 +47,12 @@ fail() {
 cmd=${1:-}
 case $cmd in
   node)
+    [[ -n $NODE_A && -n $NODE_B ]] || fail "configure MIHOMO_NODE_A and MIHOMO_NODE_B"
     configs=$(api_get /configs) || fail "configs request failed"
     mode=$(printf '%s' "$configs" | jq -r 'if (.mode | type == "string") then .mode else empty end')
     [[ -n $mode ]] || fail "current mode unavailable"
     case $mode in
-      rule) group=$GROUP ;;
+      rule) [[ -n $GROUP ]] || fail "configure MIHOMO_GROUP"; group=$GROUP ;;
       global) group=$GLOBAL_GROUP ;;
       direct) fail "direct 模式不支持切换节点" ;;
       *) fail "unsupported mode: $mode" ;;

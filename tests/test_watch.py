@@ -40,9 +40,10 @@ class State:
 
     def begin_sample(self):
         with self.lock:
-            self.phase = PHASES[min(self.next_index, len(PHASES) - 1)]
-            self.next_index = min(self.next_index + 1, len(PHASES) - 1)
-            return self.phase
+            index = self.next_index
+            self.phase = PHASES[min(index, len(PHASES) - 1)]
+            self.next_index = min(index + 1, len(PHASES) + 1)
+            return index
 
     def current(self):
         with self.lock:
@@ -57,13 +58,16 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         state = self.server.state
         if path == "/connections":
-            phase = state.begin_sample()
-            index = PHASES.index(phase)
+            index = state.begin_sample()
             payload = {
                 "uploadTotal": 1000 + index * 1000,
                 "downloadTotal": 2000 + index * 2000,
-                "connections": [],
+                "connections": None if index == 0 else [],
             }
+            if index == len(PHASES):
+                del payload["connections"]
+            elif index > len(PHASES):
+                payload["connections"] = False
         elif path == "/configs":
             payload = {"mode": state.current()[0]}
         elif path == "/proxies":
@@ -137,7 +141,7 @@ def main():
     )
 
     try:
-        samples = read_samples(proc, len(EXPECTED_NODES), timeout=20)
+        samples = read_samples(proc, len(EXPECTED_NODES) + 2, timeout=20)
     finally:
         proc.terminate()
         try:
@@ -150,12 +154,17 @@ def main():
         server.server_close()
 
     failures = []
-    if len(samples) != len(EXPECTED_NODES):
+    if len(samples) != len(EXPECTED_NODES) + 2:
         failures.append(
             "expected %d samples, got %d; stderr=%r"
-            % (len(EXPECTED_NODES), len(samples), errors[-2000:])
+            % (len(EXPECTED_NODES) + 2, len(samples), errors[-2000:])
         )
     for index, sample in enumerate(samples):
+        if index >= len(EXPECTED_NODES):
+            print("sample %d: invalid connections => %r" % (index + 1, sample))
+            if sample.get("ok") is not False or sample.get("error") != "connections response missing or invalid fields":
+                failures.append("sample %d should reject invalid connections" % (index + 1))
+            continue
         mode = PHASES[index][0]
         expected = EXPECTED_NODES[index]
         actual = sample.get("node")
@@ -168,6 +177,8 @@ def main():
         print(line)
         if sample.get("ok") is not True:
             failures.append("sample %d is not ok: %r" % (index + 1, sample))
+        if sample.get("conns") != 0:
+            failures.append("sample %d expected 0 connections" % (index + 1))
         missing = REQUIRED_KEYS - set(sample)
         if missing:
             failures.append("sample %d missing keys: %s" % (index + 1, sorted(missing)))
@@ -182,7 +193,7 @@ def main():
             print("- " + failure)
         raise SystemExit(1)
 
-    print("PASS: %d samples matched %r" % (len(samples), EXPECTED_NODES))
+    print("PASS: null and empty arrays accepted; missing and invalid connections rejected")
 
 
 if __name__ == "__main__":

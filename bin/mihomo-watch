@@ -3,7 +3,7 @@ set -u
 
 INTERVAL_DEFAULT=2
 API_DEFAULT="http://127.0.0.1:9090"
-NODE_SELECTOR='🚀 节点选择'
+NODE_SELECTOR=${MIHOMO_GROUP:-}
 NODE_FALLBACK='—'
 
 parse_interval() {

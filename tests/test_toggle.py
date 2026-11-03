@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-ROCKET = "\U0001f680 \u8282\u70b9\u9009\u62e9"
+ROCKET = "Proxy Group"
 GLOBAL = "GLOBAL"
 TOGGLER = Path(__file__).resolve().parent.parent / "bin" / "mihomo-toggle"
 
@@ -18,7 +18,7 @@ class State:
     def __init__(self):
         self.lock = threading.Lock()
         self.mode = "rule"
-        self.selectors = {ROCKET: "Enet-FB", GLOBAL: "hy2-154"}
+        self.selectors = {ROCKET: "Node A", GLOBAL: "Node B"}
         self.reject = None
         self.requests = []
 
@@ -120,9 +120,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(204)
 
 
-def run_toggle(api, args):
+def run_toggle(api, args, group=ROCKET, node_a="Node A", node_b="Node B"):
     env = os.environ.copy()
     env["MIHOMO_API"] = api
+    env["MIHOMO_GROUP"] = group
+    env["MIHOMO_NODE_A"] = node_a
+    env["MIHOMO_NODE_B"] = node_b
     env.pop("MIHOMO_SECRET", None)
     return subprocess.run(
         [str(TOGGLER), *args],
@@ -157,7 +160,15 @@ def main():
             failures.append(name + ": " + detail)
 
     try:
-        server.state.reset("global", rocket="hy2-154", global_node="hy2-154")
+        for name, kwargs in (("missing node", {"node_a": ""}), ("missing group", {"group": ""})):
+            server.state.reset("rule", rocket="Node A", global_node="Node B")
+            result = run_toggle(api, ["node"], **kwargs)
+            payload = payload_of(result)
+            check(name, result.returncode == 1 and payload and payload.get("ok") is False
+                  and server.state.snapshot()["requests"] == [],
+                  "rc=%r stdout=%r" % (result.returncode, result.stdout))
+
+        server.state.reset("global", rocket="Node B", global_node="Node B")
         result = run_toggle(api, ["node"])
         payload = payload_of(result)
         snapshot = server.state.snapshot()
@@ -167,16 +178,16 @@ def main():
             and payload is not None
             and payload.get("ok") is True
             and payload.get("group") == GLOBAL
-            and payload.get("from") == "hy2-154"
-            and payload.get("to") == "Enet-FB"
-            and snapshot["requests"] == [("PUT", "/proxies/GLOBAL", {"name": "Enet-FB"})]
-            and snapshot["selectors"][GLOBAL] == "Enet-FB"
-            and snapshot["selectors"][ROCKET] == "hy2-154",
+            and payload.get("from") == "Node B"
+            and payload.get("to") == "Node A"
+            and snapshot["requests"] == [("PUT", "/proxies/GLOBAL", {"name": "Node A"})]
+            and snapshot["selectors"][GLOBAL] == "Node A"
+            and snapshot["selectors"][ROCKET] == "Node B",
             "rc=%r stdout=%r stderr=%r state=%r"
             % (result.returncode, result.stdout, result.stderr, snapshot),
         )
 
-        server.state.reset("rule", rocket="Enet-FB", global_node="Enet-FB")
+        server.state.reset("rule", rocket="Node A", global_node="Node A")
         result = run_toggle(api, ["node"])
         payload = payload_of(result)
         snapshot = server.state.snapshot()
@@ -186,16 +197,16 @@ def main():
             and payload is not None
             and payload.get("ok") is True
             and payload.get("group") == ROCKET
-            and payload.get("from") == "Enet-FB"
-            and payload.get("to") == "hy2-154"
-            and snapshot["requests"] == [("PUT", "/proxies/" + ROCKET, {"name": "hy2-154"})]
-            and snapshot["selectors"][ROCKET] == "hy2-154"
-            and snapshot["selectors"][GLOBAL] == "Enet-FB",
+            and payload.get("from") == "Node A"
+            and payload.get("to") == "Node B"
+            and snapshot["requests"] == [("PUT", "/proxies/" + ROCKET, {"name": "Node B"})]
+            and snapshot["selectors"][ROCKET] == "Node B"
+            and snapshot["selectors"][GLOBAL] == "Node A",
             "rc=%r stdout=%r stderr=%r state=%r"
             % (result.returncode, result.stdout, result.stderr, snapshot),
         )
 
-        server.state.reset("direct", rocket="Enet-FB", global_node="hy2-154")
+        server.state.reset("direct", rocket="Node A", global_node="Node B")
         before = server.state.snapshot()
         result = run_toggle(api, ["node"])
         payload = payload_of(result)
@@ -212,7 +223,7 @@ def main():
             % (result.returncode, result.stdout, result.stderr, after),
         )
 
-        server.state.reset("rule", rocket="Enet-FB", global_node="hy2-154")
+        server.state.reset("rule", rocket="Node A", global_node="Node B")
         server.state.drop_selector(ROCKET)
         result = run_toggle(api, ["node"])
         payload = payload_of(result)
@@ -230,8 +241,8 @@ def main():
 
         server.state.reset(
             "global",
-            rocket="hy2-154",
-            global_node="hy2-154",
+            rocket="Node B",
+            global_node="Node B",
             reject=("PUT", "/proxies/GLOBAL", 400),
         )
         before = server.state.snapshot()
@@ -245,12 +256,12 @@ def main():
             and payload.get("ok") is False
             and "400" in payload.get("error", "")
             and before["selectors"] == after["selectors"]
-            and after["requests"] == [("PUT", "/proxies/GLOBAL", {"name": "Enet-FB"})],
+            and after["requests"] == [("PUT", "/proxies/GLOBAL", {"name": "Node A"})],
             "rc=%r stdout=%r stderr=%r state=%r"
             % (result.returncode, result.stdout, result.stderr, after),
         )
 
-        server.state.reset("rule", rocket="Enet-FB", global_node="hy2-154")
+        server.state.reset("rule", rocket="Node A", global_node="Node B")
         result = run_toggle(api, ["mode"])
         payload = payload_of(result)
         snapshot = server.state.snapshot()
@@ -267,7 +278,7 @@ def main():
             % (result.returncode, result.stdout, result.stderr, snapshot),
         )
 
-        server.state.reset("global", rocket="Enet-FB", global_node="hy2-154")
+        server.state.reset("global", rocket="Node A", global_node="Node B")
         result = run_toggle(api, ["mode"])
         payload = payload_of(result)
         snapshot = server.state.snapshot()
@@ -286,8 +297,8 @@ def main():
 
         server.state.reset(
             "rule",
-            rocket="Enet-FB",
-            global_node="hy2-154",
+            rocket="Node A",
+            global_node="Node B",
             reject=("PATCH", "/configs", 500),
         )
         result = run_toggle(api, ["mode"])

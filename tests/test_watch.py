@@ -62,7 +62,7 @@ class Handler(BaseHTTPRequestHandler):
             payload = {
                 "uploadTotal": 1000 + index * 1000,
                 "downloadTotal": 2000 + index * 2000,
-                "connections": [],
+                "connections": [None, [], [{"id": "connection"}], [], []][index],
             }
         elif path == "/configs":
             payload = {"mode": state.current()[0]}
@@ -169,6 +169,9 @@ def main():
         print(line)
         if sample.get("ok") is not True:
             failures.append("sample %d is not ok: %r" % (index + 1, sample))
+        expected_conns = [0, 0, 1, 0, 0][index]
+        if sample.get("conns") != expected_conns:
+            failures.append("sample %d connections expected %d, got %r" % (index + 1, expected_conns, sample.get("conns")))
         missing = REQUIRED_KEYS - set(sample)
         if missing:
             failures.append("sample %d missing keys: %s" % (index + 1, sorted(missing)))

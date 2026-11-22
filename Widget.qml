@@ -169,26 +169,86 @@ Panel {
 
   readonly property string sampleMode: sample && sample.mode !== undefined && sample.mode !== null ? String(sample.mode) : ""
   readonly property string sampleNode: sample ? field(sample.node) : "—"
+  readonly property string currentNode: sample && sample.node !== undefined && sample.node !== null ? String(sample.node) : ""
   readonly property bool directMode: sampleMode === "direct"
-  readonly property string nodeA: Quickshell.env("MIHOMO_NODE_A") || ""
-  readonly property string nodeB: Quickshell.env("MIHOMO_NODE_B") || ""
-  readonly property string ruleGroup: Quickshell.env("MIHOMO_GROUP") || ""
-  readonly property bool nodeConfigured: nodeA !== "" && nodeB !== "" && (sampleMode !== "rule" || ruleGroup !== "")
-  readonly property string nodeTarget: sampleNode === nodeB ? nodeA : nodeB
+  property string nodeA: Quickshell.env("MIHOMO_NODE_A") || ""
+  property string nodeB: Quickshell.env("MIHOMO_NODE_B") || ""
+  property string nodeC: Quickshell.env("MIHOMO_NODE_C") || ""
+  property string ruleGroup: Quickshell.env("MIHOMO_GROUP") || ""
+
+  function confLookup(text, key) {
+    var lines = String(text || "").split(/\r?\n/)
+    var prefix = key + "="
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/^\s+/, "")
+      if (line === "" || line.charAt(0) === "#" || line.charAt(0) === ";") continue
+      if (line.indexOf(prefix) !== 0) continue
+      var value = line.slice(prefix.length).replace(/^\s+/, "").replace(/\s+$/, "")
+      var quote = value.charAt(0)
+      if ((quote === "\"" || quote === "'") && value.length >= 2 && value.charAt(value.length - 1) === quote)
+        value = value.slice(1, -1)
+      return value
+    }
+    return ""
+  }
+
+  function applyWidgetConf(text) {
+    function pick(key, envName) {
+      var fromFile = root.confLookup(text, key)
+      return fromFile !== "" ? fromFile : (Quickshell.env(envName) || "")
+    }
+    root.nodeA = pick("MIHOMO_NODE_A", "MIHOMO_NODE_A")
+    root.nodeB = pick("MIHOMO_NODE_B", "MIHOMO_NODE_B")
+    root.nodeC = pick("MIHOMO_NODE_C", "MIHOMO_NODE_C")
+    root.ruleGroup = pick("MIHOMO_GROUP", "MIHOMO_GROUP")
+  }
+
+  FileView {
+    id: widgetConf
+    path: (Quickshell.env("XDG_CONFIG_HOME") || ((Quickshell.env("HOME") || "") + "/.config")) + "/environment.d/mihomo-widget.conf"
+    watchChanges: true
+    printErrors: false
+    blockLoading: true
+    onLoaded: root.applyWidgetConf(text())
+    onLoadFailed: root.applyWidgetConf("")
+    onFileChanged: reload()
+  }
+
+  readonly property var nodeChoices: {
+    var list = []
+    var seen = {}
+    var raw = [root.nodeA, root.nodeB, root.nodeC]
+    for (var i = 0; i < raw.length; i++) {
+      var name = raw[i]
+      if (!name || seen[name]) continue
+      seen[name] = true
+      list.push(name)
+    }
+    return list
+  }
+  readonly property bool nodeConfigured: nodeChoices.length >= 2 && (sampleMode !== "rule" || ruleGroup !== "")
   readonly property string modeTarget: sampleMode === "global" ? "rule" : "global"
   readonly property bool actionsReady: status === "live" && !toggleBusy
   readonly property bool nodeActionEnabled: actionsReady && !directMode && nodeConfigured
   readonly property bool modeActionEnabled: actionsReady
+  property string busyNode: ""
   onNodeActionEnabledChanged: if (!nodeActionEnabled && root.opened) keyCatcher.forceActiveFocus()
   onModeActionEnabledChanged: if (!modeActionEnabled && root.opened) keyCatcher.forceActiveFocus()
 
-  readonly property string nodeButtonText: {
-    if (toggleBusy && busyAction === "node") return "节点：切换中…"
+  function nodeButtonText(name) {
+    if (root.toggleBusy && root.busyAction === "node" && root.busyNode === name) return "节点：切换中…"
+    if (!root.sample) return "节点：" + name
+    if (root.status === "offline") return "节点：" + name + "（离线）"
+    if (root.directMode) return "节点：" + name + "（direct 不可切换）"
+    if (name === root.currentNode) return "节点：当前 " + name
+    return "节点：切换到 " + name
+  }
+
+  readonly property string nodeUnavailableText: {
     if (!sample) return "节点：等待状态"
     if (status === "offline") return "节点：状态离线"
     if (directMode) return "节点：direct 模式不可切换"
-    if (!nodeConfigured) return "节点：请配置切换选项"
-    return "节点：当前 " + sampleNode + " → " + nodeTarget
+    return "节点：请配置切换选项"
   }
 
   readonly property string modeButtonText: {
@@ -232,6 +292,7 @@ Panel {
       var action = root.busyAction
       root.toggleBusy = false
       root.busyAction = ""
+      root.busyNode = ""
       if (!root.toggleResultSeen) {
         var prefix = action === "node" ? "节点" : (action === "mode" ? "模式" : "操作")
         root.toggleError = prefix + "切换失败（退出码 " + code + "）"
@@ -241,27 +302,40 @@ Panel {
     }
   }
 
-  function runToggle(action) {
+  function runToggle(action, target) {
     if (root.toggleBusy) return
     if (action === "node" && !root.nodeActionEnabled) return
     if (action === "mode" && !root.modeActionEnabled) return
     root.toggleBusy = true
     root.busyAction = action
+    root.busyNode = action === "node" && target ? String(target) : ""
     root.toggleError = ""
     root.toggleNotice = ""
     root.toggleResultSeen = false
     if (root.opened) keyCatcher.forceActiveFocus()
-    toggleProc.command = [root.toggler, action]
+    toggleProc.command = target ? [root.toggler, action, String(target)] : [root.toggler, action]
     toggleProc.running = true
   }
 
   function toggleNode() { root.runToggle("node") }
+  function selectNode(name) {
+    if (!name || name === root.currentNode || !root.nodeActionEnabled) return
+    root.runToggle("node", name)
+  }
   function toggleMode() { root.runToggle("mode") }
 
-  function moveButtonFocus(direction) {
+  function focusableButtons() {
     var list = []
-    if (nodeButton.enabled) list.push(nodeButton)
+    for (var i = 0; i < nodeButtons.count; i++) {
+      var item = nodeButtons.itemAt(i)
+      if (item && item.enabled && item.focusable) list.push(item)
+    }
     if (modeButton.enabled) list.push(modeButton)
+    return list
+  }
+
+  function moveButtonFocus(direction) {
+    var list = root.focusableButtons()
     if (list.length === 0) {
       keyCatcher.forceActiveFocus()
       return
@@ -280,8 +354,14 @@ Panel {
   }
 
   function activateFocusedButton() {
-    if (nodeButton.activeFocus) root.toggleNode()
-    else if (modeButton.activeFocus) root.toggleMode()
+    for (var i = 0; i < nodeButtons.count; i++) {
+      var item = nodeButtons.itemAt(i)
+      if (item && item.activeFocus) {
+        root.selectNode(item.nodeName)
+        return
+      }
+    }
+    if (modeButton.activeFocus) root.toggleMode()
   }
 
   function stateJson() {
@@ -444,22 +524,45 @@ Panel {
         Rectangle { width: parent.width; height: 1; color: root.faint }
 
         Column {
+          id: actions
           width: parent.width
           spacing: Style.space(2)
           Button {
-            id: nodeButton
+            id: nodeConfigButton
+            visible: root.nodeChoices.length < 2
             Keys.forwardTo: [keyCatcher]
             width: parent.width
             leftAlign: true
             bordered: true
-            focusable: true
-            enabled: root.nodeActionEnabled
-            opacity: enabled ? 1.0 : 0.45
-            text: root.nodeButtonText
+            focusable: false
+            enabled: false
+            opacity: 0.45
+            text: root.nodeUnavailableText
             fontSize: Style.font.bodySmall
             fontFamily: root.fontFamily
             foreground: root.fg
-            onClicked: root.toggleNode()
+          }
+          Repeater {
+            id: nodeButtons
+            model: root.nodeChoices
+            Button {
+              required property string modelData
+              required property int index
+              readonly property string nodeName: modelData
+              Keys.forwardTo: [keyCatcher]
+              width: actions.width
+              leftAlign: true
+              bordered: true
+              focusable: root.nodeActionEnabled && modelData !== root.currentNode
+              enabled: root.nodeActionEnabled
+              selected: modelData === root.currentNode
+              opacity: root.nodeActionEnabled ? 1.0 : 0.45
+              text: root.nodeButtonText(modelData)
+              fontSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              foreground: root.fg
+              onClicked: root.selectNode(modelData)
+            }
           }
           Button {
             id: modeButton
@@ -569,8 +672,21 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): void { root.refresh() }
     function toggleNode(): void { root.toggleNode() }
+    function selectNode(name: string): void { root.selectNode(name) }
     function toggleMode(): void { root.toggleMode() }
-    function uiState(): string { return JSON.stringify({opened:root.opened,ready:root.actionsReady,nodeEnabled:nodeButton.enabled,nodeFocus:nodeButton.activeFocus,modeFocus:modeButton.activeFocus,keyFocus:keyCatcher.activeFocus,busy:root.toggleBusy,error:root.toggleError,notice:root.toggleNotice}) }
+    function uiState(): string {
+      var nodeEnabled = false
+      var nodeFocus = false
+      var nodes = []
+      for (var i = 0; i < nodeButtons.count; i++) {
+        var item = nodeButtons.itemAt(i)
+        if (!item) continue
+        nodes.push(item.nodeName)
+        if (item.enabled && item.focusable) nodeEnabled = true
+        if (item.activeFocus) nodeFocus = true
+      }
+      return JSON.stringify({opened:root.opened,ready:root.actionsReady,nodeEnabled:nodeEnabled,nodeFocus:nodeFocus,nodes:nodes,modeFocus:modeButton.activeFocus,keyFocus:keyCatcher.activeFocus,busy:root.toggleBusy,error:root.toggleError,notice:root.toggleNotice})
+    }
     function state(): string { return root.stateJson() }
   }
 }

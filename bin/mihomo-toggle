@@ -1,11 +1,41 @@
 #!/usr/bin/env bash
 set -u
 
+# Node names live in the widget conf so a running shell picks up edits
+# without a new login. MIHOMO_WIDGET_CONF overrides the path; an empty
+# value skips the file so tests stay on the process environment.
+load_widget_conf() {
+  local file line key value
+  if [[ -v MIHOMO_WIDGET_CONF ]]; then
+    file=$MIHOMO_WIDGET_CONF
+  else
+    file=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/mihomo-widget.conf
+  fi
+  [[ -n $file && -f $file ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%$'\r'}
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ $line =~ ^[[:space:]]*(MIHOMO_[A-Z0-9_]+)=(.*)$ ]] || continue
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    if [[ ${#value} -ge 2 && ( ${value:0:1} == '"' || ${value:0:1} == "'" ) && ${value: -1} == "${value:0:1}" ]]; then
+      value=${value:1:${#value}-2}
+    fi
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done < "$file"
+}
+
+load_widget_conf
+
 API_DEFAULT="http://127.0.0.1:9090"
 GROUP=${MIHOMO_GROUP:-}
 GLOBAL_GROUP='GLOBAL'
 NODE_A=${MIHOMO_NODE_A:-}
 NODE_B=${MIHOMO_NODE_B:-}
+NODE_C=${MIHOMO_NODE_C:-}
 
 api=${MIHOMO_API:-$API_DEFAULT}
 auth=()
@@ -44,10 +74,31 @@ fail() {
   exit 1
 }
 
+configured_nodes() {
+  local name existing
+  NODES=()
+  for name in "$NODE_A" "$NODE_B" "$NODE_C"; do
+    [[ -n $name ]] || continue
+    for existing in "${NODES[@]+"${NODES[@]}"}"; do
+      [[ $existing == "$name" ]] && continue 2
+    done
+    NODES+=("$name")
+  done
+}
+
+node_in_list() {
+  local name=$1 existing
+  for existing in "${NODES[@]+"${NODES[@]}"}"; do
+    [[ $existing == "$name" ]] && return 0
+  done
+  return 1
+}
+
 cmd=${1:-}
 case $cmd in
   node)
-    [[ -n $NODE_A && -n $NODE_B ]] || fail "configure MIHOMO_NODE_A and MIHOMO_NODE_B"
+    configured_nodes
+    (( ${#NODES[@]} >= 1 )) || fail "configure MIHOMO_NODE_A and MIHOMO_NODE_B"
     configs=$(api_get /configs) || fail "configs request failed"
     mode=$(printf '%s' "$configs" | jq -r 'if (.mode | type == "string") then .mode else empty end')
     [[ -n $mode ]] || fail "current mode unavailable"
@@ -67,10 +118,19 @@ case $cmd in
       then .proxies[$g].now
       else empty end')
     [[ -n $current ]] || fail "节点组不可用：${group}"
-    if [[ $current == "$NODE_B" ]]; then
-      target=$NODE_A
+    requested=${2:-}
+    if [[ -n $requested ]]; then
+      node_in_list "$requested" || fail "node is not configured: $requested"
+      target=$requested
     else
-      target=$NODE_B
+      (( ${#NODES[@]} >= 2 )) || fail "configure at least two of MIHOMO_NODE_A, MIHOMO_NODE_B, and MIHOMO_NODE_C"
+      target=${NODES[0]}
+      for i in "${!NODES[@]}"; do
+        if [[ ${NODES[$i]} == "$current" ]]; then
+          target=${NODES[$(( (i + 1) % ${#NODES[@]} ))]}
+          break
+        fi
+      done
     fi
     code=$(api_put "/proxies/$(urlencode "$group")" "$(jq -cn --arg name "$target" '{name:$name}')")
     rc=$?

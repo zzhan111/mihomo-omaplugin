@@ -11,8 +11,8 @@ Omarchy 栏上的 mihomo 流量小组件。默认只读展示状态；面板上�
 - `rule` 下的节点是默认组的选中节点，不代表所有连接都走它。
 - 左键打开明细面板，显示模式、节点、下行、上行、累计下行、累计上行、连接数和最后更新秒数。
 - 面板顶部显示实时、数据过期、离线或启动中。`rule` 会提示节点来自默认组，`direct` 会提示节点按钮不可用。
-- 面板内按 `r` 重启采样进程，按 `Esc` 关闭。按 `Tab`/`Shift+Tab` 在两个按钮间移动焦点，按 `Enter`/`Space` 执行当前按钮。
-- 面板底部两个按钮显示当前模式和节点与下一个目标：节点按钮在 `rule` 下切配置组，在 `global` 下切 `GLOBAL`；模式按钮在 `rule` 与 `global` 间切换。节点按钮在配置不完整或 `direct` 下禁用；离线、数据过期、启动中或操作进行中两个按钮都禁用。
+- 面板内按 `r` 重启采样进程，按 `Esc` 关闭。按 `Tab`/`Shift+Tab` 在节点按钮和模式按钮间移动焦点，按 `Enter`/`Space` 执行当前按钮。当前节点不是焦点目标。
+- 面板底部为每个已配置节点放一个按钮，点哪个就切到哪个。当前节点保持选中。`rule` 下切配置组，`global` 下切 `GLOBAL`。模式按钮在 `rule` 与 `global` 间切换。节点按钮在配置不足两个或 `direct` 下禁用；离线、数据过期、启动中或操作进行中全部禁用。
 - 操作完成后显示控制器返回的实际切换结果，失败时显示错误。
 - 采样进程退出后 30 秒自动重启。
 
@@ -52,8 +52,9 @@ omarchy plugin enable io.github.zzhan111.mihomo
 | `MIHOMO_API` | `http://127.0.0.1:9090` | 外部控制器地址 |
 | `MIHOMO_SECRET` | 空 | 非空时作为 Bearer token 发送 |
 | `MIHOMO_GROUP` | 空 | `rule` 模式的选择组名称 |
-| `MIHOMO_NODE_A` | 空 | 切换目标之一 |
-| `MIHOMO_NODE_B` | 空 | 另一个切换目标 |
+| `MIHOMO_NODE_A` | 空 | 面板上的第一个节点 |
+| `MIHOMO_NODE_B` | 空 | 面板上的第二个节点 |
+| `MIHOMO_NODE_C` | 空 | 面板上的第三个节点，可留空 |
 
 例如，在 `~/.config/environment.d/mihomo-widget.conf` 中填写以下虚构示例并替换为自己的名称：
 
@@ -61,6 +62,7 @@ omarchy plugin enable io.github.zzhan111.mihomo
 MIHOMO_GROUP=Proxy Group
 MIHOMO_NODE_A=Node A
 MIHOMO_NODE_B=Node B
+MIHOMO_NODE_C=Node C
 ```
 
 修改会话环境通常需要重新登录；仅在终端设置变量不会改变已运行的 shell。请限制含凭据的配置文件权限。
@@ -75,6 +77,7 @@ omarchy-shell io.github.zzhan111.mihomo close
 omarchy-shell io.github.zzhan111.mihomo toggle
 omarchy-shell io.github.zzhan111.mihomo refresh
 omarchy-shell io.github.zzhan111.mihomo toggleNode
+omarchy-shell io.github.zzhan111.mihomo selectNode "Node B"
 omarchy-shell io.github.zzhan111.mihomo toggleMode
 omarchy-shell io.github.zzhan111.mihomo state
 ```
@@ -149,6 +152,6 @@ python3 tests/test_toggle.py
 ## 限制
 
 - 采样脚本只发 `GET`。切换脚本先读 `/configs`，再按模式对 `GLOBAL` 或配置组发 `PUT`，模式切换发 `PATCH /configs`。
-- 节点按钮在 `MIHOMO_NODE_A` 与 `MIHOMO_NODE_B` 之间切换；`rule` 使用 `MIHOMO_GROUP`，`global` 使用 `GLOBAL`，`direct` 拒绝切换。模式按钮只在 `rule` 与 `global` 间切换；当前为 `direct` 时切到 `global`。
+- 面板按 `MIHOMO_NODE_A`、`MIHOMO_NODE_B`、`MIHOMO_NODE_C` 各放一个按钮，点选即切换；未设置的槽位不显示。`toggleNode` 仍按这个顺序循环。`rule` 使用 `MIHOMO_GROUP`，`global` 使用 `GLOBAL`，`direct` 拒绝切换。模式按钮只在 `rule` 与 `global` 间切换；当前为 `direct` 时切到 `global`。
 - 速率是采样区间的平均值，不是瞬时值。
 - 插件没有设置项，因此清单里没有 `schema` 和 `defaults`。

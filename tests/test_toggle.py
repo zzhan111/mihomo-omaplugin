@@ -4,6 +4,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -120,12 +121,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(204)
 
 
-def run_toggle(api, args, group=ROCKET, node_a="Node A", node_b="Node B"):
+def run_toggle(api, args, group=ROCKET, node_a="Node A", node_b="Node B", node_c="", widget_conf=""):
     env = os.environ.copy()
     env["MIHOMO_API"] = api
     env["MIHOMO_GROUP"] = group
     env["MIHOMO_NODE_A"] = node_a
     env["MIHOMO_NODE_B"] = node_b
+    env["MIHOMO_NODE_C"] = node_c
+    env["MIHOMO_WIDGET_CONF"] = widget_conf
     env.pop("MIHOMO_SECRET", None)
     return subprocess.run(
         [str(TOGGLER), *args],
@@ -260,6 +263,85 @@ def main():
             "rc=%r stdout=%r stderr=%r state=%r"
             % (result.returncode, result.stdout, result.stderr, after),
         )
+
+        nodes = ("Node A", "Node B", "Node C")
+        for current, nxt in zip(nodes, nodes[1:] + nodes[:1]):
+            server.state.reset("global", rocket="Node A", global_node=current)
+            result = run_toggle(api, ["node"], node_a=nodes[0], node_b=nodes[1], node_c=nodes[2])
+            payload = payload_of(result)
+            snapshot = server.state.snapshot()
+            check(
+                "cycle three nodes from " + current,
+                result.returncode == 0
+                and payload is not None
+                and payload.get("to") == nxt
+                and snapshot["selectors"][GLOBAL] == nxt
+                and snapshot["requests"] == [("PUT", "/proxies/GLOBAL", {"name": nxt})],
+                "rc=%r stdout=%r stderr=%r state=%r"
+                % (result.returncode, result.stdout, result.stderr, snapshot),
+            )
+
+        server.state.reset("global", rocket="Node A", global_node=nodes[0])
+        result = run_toggle(api, ["node", nodes[1]], node_a=nodes[0], node_b=nodes[1], node_c=nodes[2])
+        payload = payload_of(result)
+        snapshot = server.state.snapshot()
+        check(
+            "explicit node selects the named proxy",
+            result.returncode == 0
+            and payload is not None
+            and payload.get("from") == nodes[0]
+            and payload.get("to") == nodes[1]
+            and snapshot["selectors"][GLOBAL] == nodes[1],
+            "rc=%r stdout=%r stderr=%r state=%r"
+            % (result.returncode, result.stdout, result.stderr, snapshot),
+        )
+
+        server.state.reset("global", rocket="Node A", global_node=nodes[0])
+        before = server.state.snapshot()
+        result = run_toggle(api, ["node", "Other"], node_a=nodes[0], node_b=nodes[1], node_c=nodes[2])
+        payload = payload_of(result)
+        after = server.state.snapshot()
+        check(
+            "unknown node is rejected without mutation",
+            result.returncode == 1
+            and payload is not None
+            and payload.get("ok") is False
+            and before["selectors"] == after["selectors"]
+            and after["requests"] == [],
+            "rc=%r stdout=%r stderr=%r state=%r"
+            % (result.returncode, result.stdout, result.stderr, after),
+        )
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as conf:
+            conf.write(
+                'MIHOMO_NODE_A="Node A"\n'
+                'MIHOMO_NODE_B="Node B"\n'
+                'MIHOMO_NODE_C="Node C"\n'
+            )
+            conf_path = conf.name
+        try:
+            server.state.reset("global", rocket="Other", global_node="Node A")
+            result = run_toggle(
+                api,
+                ["node", "Node B"],
+                node_a="stale-a",
+                node_b="stale-b",
+                node_c="",
+                widget_conf=conf_path,
+            )
+            payload = payload_of(result)
+            snapshot = server.state.snapshot()
+            check(
+                "widget conf overrides stale node names",
+                result.returncode == 0
+                and payload is not None
+                and payload.get("to") == "Node B"
+                and snapshot["selectors"][GLOBAL] == "Node B",
+                "rc=%r stdout=%r stderr=%r state=%r"
+                % (result.returncode, result.stdout, result.stderr, snapshot),
+            )
+        finally:
+            os.unlink(conf_path)
 
         server.state.reset("rule", rocket="Node A", global_node="Node B")
         result = run_toggle(api, ["mode"])
